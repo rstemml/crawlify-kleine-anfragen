@@ -11,9 +11,17 @@ Usage:
 Options:
     --full      Alle Drucksachen für alle Vorgänge holen (langsam!)
     --limit N   Nur für die N neuesten Vorgänge Drucksachen holen (default: 50)
+
+Exit Codes:
+    0   Success
+    1   General error
+    2   Already running (lockfile exists)
 """
 
 import argparse
+import atexit
+import fcntl
+import logging
 import sys
 from pathlib import Path
 
@@ -32,19 +40,63 @@ BASE_DIR = Path(__file__).parent.parent
 RAW_DIR = BASE_DIR / "data" / "raw" / "vorgang"
 DB_PATH = BASE_DIR / "data" / "db" / "crawlify.sqlite"
 STATE_PATH = BASE_DIR / "state" / "vorgang_cursor.json"
+LOCK_PATH = BASE_DIR / "state" / "update_db.lock"
+
+# Configure logging
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "update_db.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
+class LockFile:
+    """Context manager for file-based locking to prevent concurrent runs."""
+    
+    def __init__(self, lock_path: Path):
+        self.lock_path = lock_path
+        self.lock_file = None
+    
+    def __enter__(self):
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock_file = open(self.lock_path, 'w')
+        try:
+            fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.lock_file.write(str(sys.argv))
+            self.lock_file.flush()
+            return self
+        except BlockingIOError:
+            self.lock_file.close()
+            raise RuntimeError("Another instance is already running")
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.lock_file:
+            fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_UN)
+            self.lock_file.close()
+            try:
+                self.lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def fetch_and_normalize_vorgaenge(client: DipClient, conn, raw_dir: Path, state_path: Path) -> int:
     """Fetch new vorgänge and normalize them into the database."""
-    print("\n=== 1. Fetching new Vorgänge ===")
+    logger.info("=== 1. Fetching new Vorgänge ===")
 
     state = load_cursor_state(state_path)
     cursor = state.cursor
 
     if cursor:
-        print(f"Resuming from cursor: {cursor[:50]}...")
+        logger.info(f"Resuming from cursor: {cursor[:50]}...")
     else:
-        print("Starting fresh (no cursor)")
+        logger.info("Starting fresh (no cursor)")
 
     total_items = 0
     page_idx = 0
@@ -64,25 +116,25 @@ def fetch_and_normalize_vorgaenge(client: DipClient, conn, raw_dir: Path, state_
         save_cursor_state(state_path, CursorState(cursor=page.cursor))
 
         page_idx += 1
-        print(f"  Page {page_idx}: {len(page.items)} items (total: {total_items})")
+        logger.info(f"  Page {page_idx}: {len(page.items)} items (total: {total_items})")
 
         if not page.cursor:
             break
 
     conn.commit()
-    print(f"Fetched and normalized {total_items} vorgänge")
+    logger.info(f"Fetched and normalized {total_items} vorgänge")
     return total_items
 
 
 def fetch_drucksachen_for_vorgaenge(client: DipClient, conn, vorgang_ids: list) -> int:
     """Fetch drucksachen for given vorgänge using drucksachetyp filter."""
-    print(f"\n=== 2. Fetching Drucksachen for {len(vorgang_ids)} Vorgänge ===")
+    logger.info(f"=== 2. Fetching Drucksachen for {len(vorgang_ids)} Vorgänge ===")
 
     target_set = set(str(v) for v in vorgang_ids)
     total_saved = 0
 
     for doc_type in ["Kleine Anfrage", "Antwort"]:
-        print(f"\n  Fetching {doc_type}...")
+        logger.info(f"  Fetching {doc_type}...")
 
         url = f"{client.cfg.dip_base_url}/drucksache"
         params = {
@@ -121,7 +173,7 @@ def fetch_drucksachen_for_vorgaenge(client: DipClient, conn, vorgang_ids: list) 
             if not cursor:
                 break
 
-        print(f"    Found {len(found_vorgaenge)} vorgänge, saved {total_saved} drucksachen")
+        logger.info(f"    Found {len(found_vorgaenge)} vorgänge, saved {total_saved} drucksachen")
 
     conn.commit()
     return total_saved
@@ -129,7 +181,7 @@ def fetch_drucksachen_for_vorgaenge(client: DipClient, conn, vorgang_ids: list) 
 
 def fetch_drucksache_texts(client: DipClient, conn) -> int:
     """Fetch full text for drucksachen that don't have it yet."""
-    print("\n=== 3. Fetching Drucksache Texts ===")
+    logger.info("=== 3. Fetching Drucksache Texts ===")
 
     # Get drucksachen without text
     rows = conn.execute("""
@@ -140,7 +192,7 @@ def fetch_drucksache_texts(client: DipClient, conn) -> int:
     """).fetchall()
 
     drucksache_ids = [r["drucksache_id"] for r in rows]
-    print(f"  {len(drucksache_ids)} drucksachen without text")
+    logger.info(f"  {len(drucksache_ids)} drucksachen without text")
 
     if not drucksache_ids:
         return 0
@@ -164,12 +216,12 @@ def fetch_drucksache_texts(client: DipClient, conn) -> int:
                         if row["drucksache_id"] and row["volltext"]:
                             upsert_drucksache_text(conn, row)
                             total_saved += 1
-                            print(f"    {ds_id}: {len(row['volltext'])} chars")
+                            logger.debug(f"    {ds_id}: {len(row['volltext'])} chars")
         except Exception as e:
-            print(f"    {ds_id}: Error - {e}")
+            logger.warning(f"    {ds_id}: Error - {e}")
 
     conn.commit()
-    print(f"  Saved {total_saved} texts")
+    logger.info(f"  Saved {total_saved} texts")
     return total_saved
 
 
@@ -186,66 +238,85 @@ def get_vorgaenge_without_drucksachen(conn, limit: int) -> list:
     return [r["vorgang_id"] for r in rows]
 
 
-def print_summary(conn):
-    """Print database summary."""
-    print("\n=== Datenbank-Übersicht ===")
+def log_summary(conn):
+    """Log database summary."""
+    logger.info("=== Datenbank-Übersicht ===")
     for table in ["vorgang", "drucksache", "drucksache_text"]:
         count = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()["c"]
-        print(f"  {table}: {count}")
+        logger.info(f"  {table}: {count}")
 
 
-def main():
+def main() -> int:
+    """Main entry point. Returns exit code."""
     parser = argparse.ArgumentParser(description="Update crawlify database")
     parser.add_argument("--full", action="store_true", help="Fetch drucksachen for ALL vorgänge")
     parser.add_argument("--limit", type=int, default=50, help="Limit vorgänge for drucksache fetch")
     parser.add_argument("--skip-vorgang", action="store_true", help="Skip vorgang fetch")
     parser.add_argument("--skip-drucksache", action="store_true", help="Skip drucksache fetch")
     parser.add_argument("--skip-text", action="store_true", help="Skip text fetch")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
-    # Setup
-    cfg = load_config()
-    client = DipClient(cfg)
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
 
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with LockFile(LOCK_PATH):
+            logger.info("=" * 50)
+            logger.info("Crawlify Update Script started")
+            logger.info("=" * 50)
 
-    conn = connect(DbConfig(path=DB_PATH))
-    init_db(conn)
+            # Setup
+            cfg = load_config()
+            client = DipClient(cfg)
 
-    print("=" * 50)
-    print("Crawlify Update Script")
-    print("=" * 50)
-    print_summary(conn)
+            RAW_DIR.mkdir(parents=True, exist_ok=True)
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Fetch and normalize vorgänge
-    if not args.skip_vorgang:
-        from crawlify.db import upsert_vorgang
-        fetch_and_normalize_vorgaenge(client, conn, RAW_DIR, STATE_PATH)
+            conn = connect(DbConfig(path=DB_PATH))
+            init_db(conn)
 
-    # 2. Fetch drucksachen
-    if not args.skip_drucksache:
-        if args.full:
-            vorgang_ids = [r["vorgang_id"] for r in conn.execute(
-                "SELECT vorgang_id FROM vorgang"
-            ).fetchall()]
-        else:
-            vorgang_ids = get_vorgaenge_without_drucksachen(conn, args.limit)
+            log_summary(conn)
 
-        if vorgang_ids:
-            fetch_drucksachen_for_vorgaenge(client, conn, vorgang_ids)
-        else:
-            print("\n=== 2. No new vorgänge need drucksachen ===")
+            # 1. Fetch and normalize vorgänge
+            if not args.skip_vorgang:
+                from crawlify.db import upsert_vorgang
+                fetch_and_normalize_vorgaenge(client, conn, RAW_DIR, STATE_PATH)
 
-    # 3. Fetch texts
-    if not args.skip_text:
-        fetch_drucksache_texts(client, conn)
+            # 2. Fetch drucksachen
+            if not args.skip_drucksache:
+                if args.full:
+                    vorgang_ids = [r["vorgang_id"] for r in conn.execute(
+                        "SELECT vorgang_id FROM vorgang"
+                    ).fetchall()]
+                else:
+                    vorgang_ids = get_vorgaenge_without_drucksachen(conn, args.limit)
 
-    print("\n" + "=" * 50)
-    print("Update complete!")
-    print_summary(conn)
+                if vorgang_ids:
+                    fetch_drucksachen_for_vorgaenge(client, conn, vorgang_ids)
+                else:
+                    logger.info("=== 2. No new vorgänge need drucksachen ===")
+
+            # 3. Fetch texts
+            if not args.skip_text:
+                fetch_drucksache_texts(client, conn)
+
+            logger.info("=" * 50)
+            logger.info("Update complete!")
+            log_summary(conn)
+            return 0
+
+    except RuntimeError as e:
+        if "already running" in str(e).lower():
+            logger.error(f"Cannot start: {e}")
+            return 2
+        logger.exception("Runtime error occurred")
+        return 1
+    except Exception as e:
+        logger.exception(f"Unexpected error: {e}")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,0 +1,19 @@
+[Unit]
+Description=Crawlify Kleine Anfragen Update
+Documentation=https://github.com/rstemmler/crawlify-kleine-anfragen
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rstemmler
+WorkingDirectory=/home/rstemmler/Source/my-embedding/crawlify-kleine-anfragen
+Environment="PATH=/home/rstemmler/.local/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/python3 scripts/update_db.py --full
+TimeoutStartSec=3600
+# Retry on failure
+Restart=on-failure
+RestartSec=300
+
+[Install]
+WantedBy=multi-user.target

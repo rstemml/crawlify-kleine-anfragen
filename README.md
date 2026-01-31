@@ -96,10 +96,17 @@ GROUP BY beratungsstand;
 ├── data/
 │   ├── raw/vorgang/       # Original JSON von API
 │   └── db/crawlify.sqlite # Normalisierte Datenbank
+├── logs/
+│   └── update_db.log      # Logs vom Update-Script
 ├── state/
-│   └── vorgang_cursor.json # Für inkrementelle Updates
+│   ├── vorgang_cursor.json # Für inkrementelle Updates
+│   └── update_db.lock     # Lockfile (verhindert parallele Läufe)
 ├── scripts/
-│   └── update_db.py       # Update-Script
+│   ├── update_db.py       # Update-Script
+│   └── install-systemd.sh # Installiert systemd Timer
+├── systemd/
+│   ├── crawlify-update.service # Systemd Service
+│   └── crawlify-update.timer   # Systemd Timer (täglich 3:00)
 └── src/crawlify/          # Python-Module
     ├── cli.py             # CLI-Befehle
     ├── dip_client.py      # API-Client
@@ -112,7 +119,62 @@ GROUP BY beratungsstand;
 Die Daten kommen von der DIP-API (Dokumentations- und Informationssystem für Parlamentarische Vorgänge):
 - Basis-URL: `https://search.dip.bundestag.de/api/v1`
 - Max 100 Items pro Request (Cursor-Pagination)
-- Bot-Schutz (Enodia) - wird automatisch gelöst
+- Bot-Schutz (Enodia) - siehe nächster Abschnitt
+
+## Bot-Schutz (Captcha)
+
+Die DIP-API verwendet Enodia-Challenges als Bot-Schutz. Um diese automatisch zu lösen:
+
+```bash
+# Playwright installieren
+pip install -e ".[browser]"
+
+# Chromium-Browser herunterladen
+playwright install chromium
+```
+
+Bei Bedarf kann die Challenge manuell gelöst werden:
+
+```bash
+crawlify solve-challenge   # Öffnet Browser zur manuellen Lösung
+crawlify clear-cookies     # Löscht gespeicherte Cookies
+```
+
+Die gelösten Cookies werden in `state/cookies.json` gecacht.
+
+## Automatische Updates (CronJob)
+
+Das Projekt enthält systemd-Dateien für tägliche automatische Updates.
+
+### Installation
+
+```bash
+# 1. Initialen Full-Load durchführen (kann Stunden dauern)
+python scripts/update_db.py --full
+
+# 2. Systemd Timer installieren (als root)
+sudo ./scripts/install-systemd.sh
+```
+
+### Timer verwalten
+
+```bash
+# Status prüfen
+systemctl status crawlify-update.timer
+
+# Logs ansehen
+journalctl -u crawlify-update.service
+
+# Manuell ausführen
+sudo systemctl start crawlify-update.service
+
+# Timer deaktivieren
+sudo systemctl disable crawlify-update.timer
+```
+
+### Logs
+
+Das Update-Script schreibt Logs nach `logs/update_db.log`.
 
 ## CLI-Befehle (Einzeln)
 
