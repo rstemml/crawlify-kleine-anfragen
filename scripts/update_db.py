@@ -16,6 +16,7 @@ Exit Codes:
     0   Success
     1   General error
     2   Already running (lockfile exists)
+    3   Authentication error (Enodia cookie invalid)
 """
 
 import argparse
@@ -29,10 +30,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from crawlify.config import load_config
-from crawlify.db import DbConfig, connect, init_db, upsert_drucksache, upsert_drucksache_text
-from crawlify.dip_client import DipClient, write_page_raw
+from crawlify.db import DbConfig, connect, init_db, upsert_vorgang, upsert_drucksache, upsert_drucksache_text
+from crawlify.dip_client import DipClient, EmptyResponseError, write_page_raw
 from crawlify.ingest import ingest_vorgang_kleine_anfrage
 from crawlify.normalize import normalize_vorgang, normalize_drucksache, normalize_drucksache_text
+from crawlify.progress import FetchProgress
 from crawlify.storage import CursorState, load_cursor_state, save_cursor_state
 
 # Paths
@@ -100,30 +102,42 @@ def fetch_and_normalize_vorgaenge(client: DipClient, conn, raw_dir: Path, state_
 
     total_items = 0
     page_idx = 0
+    progress = FetchProgress()
 
-    for page in client.fetch_vorgang_kleine_anfrage_pages(cursor=cursor):
-        # Save raw
-        write_page_raw(page, raw_dir, page_idx, prefix="vorgang")
+    try:
+        for page in client.fetch_vorgang_kleine_anfrage_pages(cursor=cursor):
+            # Save raw
+            write_page_raw(page, raw_dir, page_idx, prefix="vorgang")
 
-        # Normalize and upsert
-        for item in page.items:
-            row = normalize_vorgang(item)
-            if row["vorgang_id"] and row["vorgangstyp"]:
-                upsert_vorgang(conn, row)
-                total_items += 1
+            # Normalize and upsert
+            for item in page.items:
+                row = normalize_vorgang(item)
+                if row["vorgang_id"] and row["vorgangstyp"]:
+                    upsert_vorgang(conn, row)
+                    total_items += 1
 
-        # Save cursor state
-        save_cursor_state(state_path, CursorState(cursor=page.cursor))
+            # Save cursor state
+            save_cursor_state(state_path, CursorState(cursor=page.cursor))
 
-        page_idx += 1
-        logger.info(f"  Page {page_idx}: {len(page.items)} items (total: {total_items})")
+            # Progress tracking
+            total_from_api = page.raw.get("numFound")
+            progress.update(len(page.items), total_from_api)
+            progress.print_status()
 
-        if not page.cursor:
-            break
+            page_idx += 1
 
-    conn.commit()
-    logger.info(f"Fetched and normalized {total_items} vorgänge")
-    return total_items
+            if not page.cursor:
+                break
+
+        progress.print_summary()
+        conn.commit()
+        logger.info(f"Fetched and normalized {total_items} vorgänge")
+        return total_items
+
+    except EmptyResponseError as e:
+        logger.error(f"\nAPI Error: {e}")
+        logger.error("Run: crawlify solve-challenge --visible")
+        raise
 
 
 def fetch_drucksachen_for_vorgaenge(client: DipClient, conn, vorgang_ids: list) -> int:
@@ -132,51 +146,70 @@ def fetch_drucksachen_for_vorgaenge(client: DipClient, conn, vorgang_ids: list) 
 
     target_set = set(str(v) for v in vorgang_ids)
     total_saved = 0
+    progress = FetchProgress()
 
-    for doc_type in ["Kleine Anfrage", "Antwort"]:
-        logger.info(f"  Fetching {doc_type}...")
+    try:
+        for doc_type in ["Kleine Anfrage", "Antwort"]:
+            logger.info(f"  Fetching {doc_type}...")
 
-        url = f"{client.cfg.dip_base_url}/drucksache"
-        params = {
-            "apikey": client.cfg.dip_api_key,
-            "size": "100",
-            "f.drucksachetyp": doc_type
-        }
+            url = f"{client.cfg.dip_base_url}/drucksache"
+            params = {
+                "apikey": client.cfg.dip_api_key,
+                "size": "100",
+                "f.drucksachetyp": doc_type
+            }
 
-        # Fetch pages until we've seen all target vorgänge or hit limit
-        found_vorgaenge = set()
-        page_num = 0
-        cursor = None
+            # Fetch pages until we've seen all target vorgänge or hit limit
+            found_vorgaenge = set()
+            page_num = 0
+            cursor = None
 
-        while len(found_vorgaenge) < len(target_set) and page_num < 50:
-            if cursor:
-                params["cursor"] = cursor
+            while len(found_vorgaenge) < len(target_set) and page_num < 50:
+                if cursor:
+                    params["cursor"] = cursor
 
-            resp = client.session.get(url, params=params, timeout=30)
-            data = resp.json()
-            items = data.get("documents", [])
-            cursor = data.get("cursor")
+                resp = client.session.get(url, params=params, timeout=30)
+                data = resp.json()
+                items = data.get("documents", [])
+                cursor = data.get("cursor")
+                num_found = data.get("numFound", 0)
 
-            for item in items:
-                vorgangsbezug = item.get("vorgangsbezug", [])
-                for vb in vorgangsbezug:
-                    vorgang_id = str(vb.get("id", ""))
-                    if vorgang_id in target_set:
-                        row = normalize_drucksache(item, vorgang_id=vorgang_id)
-                        if row["drucksache_id"]:
-                            upsert_drucksache(conn, row)
-                            total_saved += 1
-                            found_vorgaenge.add(vorgang_id)
-                        break
+                # Validate response
+                if not items and num_found > 0:
+                    raise EmptyResponseError(
+                        f"API returned empty documents but numFound={num_found}. "
+                        "Run: crawlify solve-challenge --visible"
+                    )
 
-            page_num += 1
-            if not cursor:
-                break
+                for item in items:
+                    vorgangsbezug = item.get("vorgangsbezug", [])
+                    for vb in vorgangsbezug:
+                        vorgang_id = str(vb.get("id", ""))
+                        if vorgang_id in target_set:
+                            row = normalize_drucksache(item, vorgang_id=vorgang_id)
+                            if row["drucksache_id"]:
+                                upsert_drucksache(conn, row)
+                                total_saved += 1
+                                found_vorgaenge.add(vorgang_id)
+                            break
 
-        logger.info(f"    Found {len(found_vorgaenge)} vorgänge, saved {total_saved} drucksachen")
+                progress.update(len(items))
+                progress.print_status()
+                print(f" | {doc_type}", end="", flush=True)
 
-    conn.commit()
-    return total_saved
+                page_num += 1
+                if not cursor:
+                    break
+
+            logger.info(f"\n    Found {len(found_vorgaenge)} vorgänge, saved {total_saved} drucksachen")
+
+        conn.commit()
+        return total_saved
+
+    except EmptyResponseError as e:
+        logger.error(f"\nAPI Error: {e}")
+        logger.error("Run: crawlify solve-challenge --visible")
+        raise
 
 
 def fetch_drucksache_texts(client: DipClient, conn) -> int:
@@ -198,31 +231,54 @@ def fetch_drucksache_texts(client: DipClient, conn) -> int:
         return 0
 
     total_saved = 0
-    for ds_id in drucksache_ids:
-        url = f"{client.cfg.dip_base_url}/drucksache-text"
-        params = {
-            "apikey": client.cfg.dip_api_key,
-            "f.id": ds_id  # Important: use f.id, not f.drucksache!
-        }
+    progress = FetchProgress(total_expected=len(drucksache_ids))
 
-        try:
-            resp = client.session.get(url, params=params, timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("numFound") == 1:
+    try:
+        for ds_id in drucksache_ids:
+            url = f"{client.cfg.dip_base_url}/drucksache-text"
+            params = {
+                "apikey": client.cfg.dip_api_key,
+                "f.id": ds_id  # Important: use f.id, not f.drucksache!
+            }
+
+            try:
+                resp = client.session.get(url, params=params, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    num_found = data.get("numFound", 0)
                     items = data.get("documents", [])
+
+                    # Validate response (only if numFound > 0)
+                    if not items and num_found > 0:
+                        raise EmptyResponseError(
+                            f"API returned empty documents but numFound={num_found}. "
+                            "Run: crawlify solve-challenge --visible"
+                        )
+
                     if items:
                         row = normalize_drucksache_text(items[0])
                         if row["drucksache_id"] and row["volltext"]:
                             upsert_drucksache_text(conn, row)
                             total_saved += 1
                             logger.debug(f"    {ds_id}: {len(row['volltext'])} chars")
-        except Exception as e:
-            logger.warning(f"    {ds_id}: Error - {e}")
 
-    conn.commit()
-    logger.info(f"  Saved {total_saved} texts")
-    return total_saved
+            except EmptyResponseError:
+                raise  # Re-raise auth errors
+            except Exception as e:
+                logger.warning(f"    {ds_id}: Error - {e}")
+
+            progress.update(1)
+            progress.print_status()
+
+        progress.print_summary()
+        conn.commit()
+        logger.info(f"  Saved {total_saved} texts")
+        return total_saved
+
+    except EmptyResponseError as e:
+        logger.error(f"\nAPI Error: {e}")
+        logger.error("Run: crawlify solve-challenge --visible")
+        raise
 
 
 def get_vorgaenge_without_drucksachen(conn, limit: int) -> list:
@@ -281,7 +337,6 @@ def main() -> int:
 
             # 1. Fetch and normalize vorgänge
             if not args.skip_vorgang:
-                from crawlify.db import upsert_vorgang
                 fetch_and_normalize_vorgaenge(client, conn, RAW_DIR, STATE_PATH)
 
             # 2. Fetch drucksachen
@@ -313,6 +368,13 @@ def main() -> int:
             return 2
         logger.exception("Runtime error occurred")
         return 1
+    except EmptyResponseError as e:
+        logger.error(f"\nAuthentication Error: {e}")
+        logger.error("\nTo fix this:")
+        logger.error("  1. Run: crawlify solve-challenge --visible")
+        logger.error("  2. Solve the captcha in the browser")
+        logger.error("  3. Run this script again")
+        return 3
     except Exception as e:
         logger.exception(f"Unexpected error: {e}")
         return 1

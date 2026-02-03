@@ -14,9 +14,10 @@ from .db import (
     upsert_drucksache_text,
     upsert_vorgang,
 )
-from .dip_client import DipClient, write_page_raw
+from .dip_client import DipClient, EmptyResponseError, write_page_raw
 from .embeddings import SentenceTransformerProvider
 from .ingest import ingest_vorgang_kleine_anfrage
+from .progress import FetchProgress, NormalizeProgress
 from .normalize import (
     normalize_drucksache,
     normalize_drucksache_text,
@@ -45,6 +46,28 @@ def _iter_raw_items(raw_dir: Path, pattern: str, keys: Iterable[str]) -> Iterato
             yield item
 
 
+def _iter_raw_files_with_items(
+    raw_dir: Path, pattern: str, keys: Iterable[str]
+) -> Iterator[tuple[Path, list]]:
+    """Iterate over files and their items (for progress tracking)."""
+    for path in sorted(raw_dir.glob(pattern)):
+        payload = json.loads(path.read_text())
+        items: Optional[list] = None
+        for key in keys:
+            val = payload.get(key)
+            if isinstance(val, list):
+                items = val
+                break
+        if items is None:
+            for val in payload.values():
+                if isinstance(val, list):
+                    items = val
+                    break
+        if items is None:
+            items = []
+        yield path, items
+
+
 def _iter_vorgang_ids(db_path: Path) -> List[str]:
     conn = connect(DbConfig(path=db_path))
     init_db(conn)
@@ -60,46 +83,86 @@ def _iter_drucksache_ids(db_path: Path) -> List[str]:
 
 
 def cmd_fetch_vorgang(args: argparse.Namespace) -> None:
-    total = ingest_vorgang_kleine_anfrage(
-        raw_dir=Path(args.raw_dir),
-        state_path=Path(args.state_path),
-        start_cursor=args.start_cursor,
-    )
-    print(f"ingested pages: {total}")
+    progress = FetchProgress()
+
+    def on_progress(idx, page, total_from_api):
+        progress.update(len(page.items), total_from_api)
+        progress.print_status()
+
+    try:
+        total = ingest_vorgang_kleine_anfrage(
+            raw_dir=Path(args.raw_dir),
+            state_path=Path(args.state_path),
+            start_cursor=args.start_cursor,
+            on_progress=on_progress,
+        )
+        progress.print_summary()
+    except EmptyResponseError as e:
+        print(f"\n\nError: {e}")
+        print("\nTo fix this:")
+        print("  1. Run: crawlify solve-challenge --visible")
+        print("  2. Solve the captcha in the browser")
+        print("  3. Run fetch-vorgang again")
+        raise SystemExit(1)
 
 
 def cmd_fetch_drucksache(args: argparse.Namespace) -> None:
     cfg = load_config()
     client = DipClient(cfg)
+    progress = FetchProgress()
 
-    total_pages = 0
-    for vorgang_id in _iter_vorgang_ids(Path(args.db_path)):
-        params = {args.filter_key: vorgang_id}
-        for idx, page in enumerate(client.fetch_drucksache_pages(params, cursor=None)):
-            write_page_raw(
-                page, Path(args.raw_dir), total_pages + idx, prefix="drucksache"
-            )
-            total_pages += 1
+    vorgang_ids = _iter_vorgang_ids(Path(args.db_path))
+    total_vorgaenge = len(vorgang_ids)
 
-    print(f"ingested drucksache pages: {total_pages}")
+    try:
+        total_pages = 0
+        for v_idx, vorgang_id in enumerate(vorgang_ids):
+            params = {args.filter_key: vorgang_id}
+            for idx, page in enumerate(client.fetch_drucksache_pages(params, cursor=None)):
+                write_page_raw(
+                    page, Path(args.raw_dir), total_pages + idx, prefix="drucksache"
+                )
+                total_pages += 1
+                progress.update(len(page.items))
+                # Show vorgang progress in status
+                progress.print_status()
+                print(f" | Vorgang {v_idx + 1}/{total_vorgaenge}", end="", flush=True)
+
+        progress.print_summary()
+    except EmptyResponseError as e:
+        print(f"\n\nError: {e}")
+        print("\nRun: crawlify solve-challenge --visible")
+        raise SystemExit(1)
 
 
 def cmd_fetch_drucksache_text(args: argparse.Namespace) -> None:
     cfg = load_config()
     client = DipClient(cfg)
+    progress = FetchProgress()
 
-    total_pages = 0
-    for drucksache_id in _iter_drucksache_ids(Path(args.db_path)):
-        params = {args.filter_key: drucksache_id}
-        for idx, page in enumerate(
-            client.fetch_drucksache_text_pages(params, cursor=None)
-        ):
-            write_page_raw(
-                page, Path(args.raw_dir), total_pages + idx, prefix="drucksache_text"
-            )
-            total_pages += 1
+    drucksache_ids = _iter_drucksache_ids(Path(args.db_path))
+    total_drucksachen = len(drucksache_ids)
 
-    print(f"ingested drucksache_text pages: {total_pages}")
+    try:
+        total_pages = 0
+        for d_idx, drucksache_id in enumerate(drucksache_ids):
+            params = {args.filter_key: drucksache_id}
+            for idx, page in enumerate(
+                client.fetch_drucksache_text_pages(params, cursor=None)
+            ):
+                write_page_raw(
+                    page, Path(args.raw_dir), total_pages + idx, prefix="drucksache_text"
+                )
+                total_pages += 1
+                progress.update(len(page.items))
+                progress.print_status()
+                print(f" | Drucksache {d_idx + 1}/{total_drucksachen}", end="", flush=True)
+
+        progress.print_summary()
+    except EmptyResponseError as e:
+        print(f"\n\nError: {e}")
+        print("\nRun: crawlify solve-challenge --visible")
+        raise SystemExit(1)
 
 
 def cmd_normalize_vorgang(args: argparse.Namespace) -> None:
@@ -109,19 +172,28 @@ def cmd_normalize_vorgang(args: argparse.Namespace) -> None:
     conn = connect(DbConfig(path=db_path))
     init_db(conn)
 
-    count = 0
-    for item in _iter_raw_items(
+    # Count files for progress
+    files = list(raw_dir.glob("vorgang_page_*.json"))
+    progress = NormalizeProgress(total_files=len(files))
+
+    for path, items in _iter_raw_files_with_items(
         raw_dir,
         "vorgang_page_*.json",
         keys=("documents", "vorgang", "results", "data", "items"),
     ):
-        row = normalize_vorgang(item)
-        if not row["vorgang_id"] or not row["vorgangstyp"]:
-            continue
-        upsert_vorgang(conn, row)
-        count += 1
+        new_count = 0
+        for item in items:
+            row = normalize_vorgang(item)
+            if not row["vorgang_id"] or not row["vorgangstyp"]:
+                progress.update(skipped=1)
+                continue
+            upsert_vorgang(conn, row)
+            new_count += 1
+        progress.update(new=new_count)
+        progress.file_done()
+        progress.print_status()
 
-    print(f"normalized vorgang rows: {count}")
+    progress.print_summary()
 
 
 def cmd_normalize_drucksache(args: argparse.Namespace) -> None:
@@ -131,24 +203,34 @@ def cmd_normalize_drucksache(args: argparse.Namespace) -> None:
     conn = connect(DbConfig(path=db_path))
     init_db(conn)
 
-    count = 0
-    for item in _iter_raw_items(
+    # Count files for progress
+    files = list(raw_dir.glob("drucksache_page_*.json"))
+    progress = NormalizeProgress(total_files=len(files))
+
+    for path, items in _iter_raw_files_with_items(
         raw_dir,
         "drucksache_page_*.json",
         keys=("documents", "drucksache", "results", "data", "items"),
     ):
-        vorgang_id = item.get("vorgang_id") or item.get("vorgangId") or item.get(
-            "vorgang"
-        ) or ""
-        if not vorgang_id:
-            continue
-        row = normalize_drucksache(item, vorgang_id=vorgang_id)
-        if not row["drucksache_id"]:
-            continue
-        upsert_drucksache(conn, row)
-        count += 1
+        new_count = 0
+        for item in items:
+            vorgang_id = item.get("vorgang_id") or item.get("vorgangId") or item.get(
+                "vorgang"
+            ) or ""
+            if not vorgang_id:
+                progress.update(skipped=1)
+                continue
+            row = normalize_drucksache(item, vorgang_id=vorgang_id)
+            if not row["drucksache_id"]:
+                progress.update(skipped=1)
+                continue
+            upsert_drucksache(conn, row)
+            new_count += 1
+        progress.update(new=new_count)
+        progress.file_done()
+        progress.print_status()
 
-    print(f"normalized drucksache rows: {count}")
+    progress.print_summary()
 
 
 def cmd_normalize_drucksache_text(args: argparse.Namespace) -> None:
@@ -158,19 +240,28 @@ def cmd_normalize_drucksache_text(args: argparse.Namespace) -> None:
     conn = connect(DbConfig(path=db_path))
     init_db(conn)
 
-    count = 0
-    for item in _iter_raw_items(
+    # Count files for progress
+    files = list(raw_dir.glob("drucksache_text_page_*.json"))
+    progress = NormalizeProgress(total_files=len(files))
+
+    for path, items in _iter_raw_files_with_items(
         raw_dir,
         "drucksache_text_page_*.json",
         keys=("documents", "drucksache_text", "results", "data", "items"),
     ):
-        row = normalize_drucksache_text(item)
-        if not row["drucksache_id"]:
-            continue
-        upsert_drucksache_text(conn, row)
-        count += 1
+        new_count = 0
+        for item in items:
+            row = normalize_drucksache_text(item)
+            if not row["drucksache_id"]:
+                progress.update(skipped=1)
+                continue
+            upsert_drucksache_text(conn, row)
+            new_count += 1
+        progress.update(new=new_count)
+        progress.file_done()
+        progress.print_status()
 
-    print(f"normalized drucksache_text rows: {count}")
+    progress.print_summary()
 
 
 def cmd_list_vorgang_ids(args: argparse.Namespace) -> None:
@@ -194,6 +285,8 @@ def cmd_list_vorgang_ids(args: argparse.Namespace) -> None:
 
 
 def cmd_embed_vorgang(args: argparse.Namespace) -> None:
+    import time
+
     conn = connect(DbConfig(path=Path(args.db_path)))
     init_db(conn)
 
@@ -211,7 +304,12 @@ def cmd_embed_vorgang(args: argparse.Namespace) -> None:
         print("no rows to embed")
         return
 
+    print(f"Loading model: {args.model}...")
+    start_time = time.time()
     provider = SentenceTransformerProvider(args.model)
+    print(f"Model loaded in {time.time() - start_time:.1f}s")
+
+    print("Preparing texts...")
     prepared = []
     for row in rows:
         text = _build_embedding_text(conn, row)
@@ -222,9 +320,13 @@ def cmd_embed_vorgang(args: argparse.Namespace) -> None:
         print("no non-empty texts to embed")
         return
 
+    print(f"Embedding {len(prepared)} texts...")
+    start_time = time.time()
     texts = [item[1] for item in prepared]
     result = provider.embed(texts)
+    embed_time = time.time() - start_time
 
+    print(f"Saving to database...")
     for (row, text), vec in zip(prepared, result.vectors):
         conn.execute(
             """
@@ -240,7 +342,9 @@ def cmd_embed_vorgang(args: argparse.Namespace) -> None:
             ),
         )
     conn.commit()
-    print(f"embedded rows: {len(rows)}")
+
+    rate = len(prepared) / embed_time if embed_time > 0 else 0
+    print(f"Done: {len(prepared)} embeddings in {embed_time:.1f}s ({rate:.1f} texts/s)")
 
 
 def cmd_search_vorgang(args: argparse.Namespace) -> None:

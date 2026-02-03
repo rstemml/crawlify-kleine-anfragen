@@ -1,9 +1,39 @@
+# Data & State (user-specific)
 data/
 state/
+raw/
+logs/
+experiments/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 *.egg-info/
 .pytest_cache/
-.venv
-venv
-raw
+.venv/
+venv/
+.eggs/
+dist/
+build/
+
+# Environment & Secrets (WICHTIG!)
+.env
+.env.local
+.env.production
+!.env.example
+*.key
+*.pem
+secrets.json
+credentials.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Coverage
+htmlcov/
+.coverage

@@ -25,6 +25,11 @@ class Page:
     raw: Dict[str, Any]
 
 
+class EmptyResponseError(Exception):
+    """Raised when API returns empty documents but numFound > 0 (likely auth issue)."""
+    pass
+
+
 class DipClient:
     def __init__(
         self,
@@ -71,7 +76,7 @@ class DipClient:
         self._challenge_solved = True
 
     def fetch_vorgang_kleine_anfrage_pages(
-        self, cursor: Optional[str] = None
+        self, cursor: Optional[str] = None, fail_on_empty: bool = True
     ) -> Iterator[Page]:
         params = {
             "f.vorgangstyp": "Kleine Anfrage",
@@ -90,13 +95,22 @@ class DipClient:
             items = _extract_items(data)
             next_cursor = _extract_cursor(data)
 
+            # Validate response - empty documents with numFound > 0 indicates auth issue
+            num_found = data.get("numFound", 0)
+            if fail_on_empty and not items and num_found > 0:
+                raise EmptyResponseError(
+                    f"API returned empty documents but numFound={num_found}. "
+                    "This usually means the Enodia cookie is invalid or expired. "
+                    "Run: crawlify solve-challenge --visible"
+                )
+
             yield Page(items=items, cursor=next_cursor, raw=data)
 
             if not next_cursor:
                 break
 
     def fetch_drucksache_pages(
-        self, params: Dict[str, str], cursor: Optional[str] = None
+        self, params: Dict[str, str], cursor: Optional[str] = None, fail_on_empty: bool = True
     ) -> Iterator[Page]:
         base_params = {
             "apikey": self.cfg.dip_api_key,
@@ -115,13 +129,21 @@ class DipClient:
             items = _extract_items(data)
             next_cursor = _extract_cursor(data)
 
+            # Validate response
+            num_found = data.get("numFound", 0)
+            if fail_on_empty and not items and num_found > 0:
+                raise EmptyResponseError(
+                    f"API returned empty documents but numFound={num_found}. "
+                    "Run: crawlify solve-challenge --visible"
+                )
+
             yield Page(items=items, cursor=next_cursor, raw=data)
 
             if not next_cursor:
                 break
 
     def fetch_drucksache_text_pages(
-        self, params: Dict[str, str], cursor: Optional[str] = None
+        self, params: Dict[str, str], cursor: Optional[str] = None, fail_on_empty: bool = True
     ) -> Iterator[Page]:
         base_params = {
             "apikey": self.cfg.dip_api_key,
@@ -139,6 +161,14 @@ class DipClient:
             data = self._get_json("/drucksache-text", params=base_params)
             items = _extract_items(data)
             next_cursor = _extract_cursor(data)
+
+            # Validate response
+            num_found = data.get("numFound", 0)
+            if fail_on_empty and not items and num_found > 0:
+                raise EmptyResponseError(
+                    f"API returned empty documents but numFound={num_found}. "
+                    "Run: crawlify solve-challenge --visible"
+                )
 
             yield Page(items=items, cursor=next_cursor, raw=data)
 

@@ -1,6 +1,9 @@
 # Crawlify Kleine Anfragen
 
-Sammelt "Kleine Anfragen" aus dem Deutschen Bundestag und speichert sie in einer SQLite-Datenbank.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+
+Sammelt "Kleine Anfragen" aus dem Deutschen Bundestag, speichert sie in einer SQLite-Datenbank und bietet semantische Suche.
 
 ## Was sind Kleine Anfragen?
 
@@ -43,6 +46,37 @@ python scripts/update_db.py --skip-drucksache --skip-text
 # Mehr Dokumente nachladen
 python scripts/update_db.py --skip-vorgang --limit 100
 ```
+
+## Daten-Pipeline (Wichtig!)
+
+Die Daten müssen in dieser Reihenfolge geladen werden:
+
+```
+1. VORGANG          → Metadaten (Titel, Datum, Status)
+2. DRUCKSACHE       → Dokument-Referenzen (verknüpft mit Vorgang)
+3. DRUCKSACHE_TEXT  → Volltexte aus PDFs (für Embeddings!)
+4. EMBEDDING        → Semantische Vektoren (für Suche)
+```
+
+**Einzelbefehle:**
+```bash
+# 1. Vorgänge holen + normalisieren
+crawlify fetch-vorgang
+crawlify normalize-vorgang
+
+# 2. Drucksachen holen + normalisieren
+crawlify fetch-drucksache
+crawlify normalize-drucksache
+
+# 3. Volltexte holen + normalisieren
+crawlify fetch-drucksache-text
+crawlify normalize-drucksache-text
+
+# 4. Embeddings erstellen (benötigt pip install -e ".[embeddings]")
+crawlify embed-vorgang
+```
+
+**Wichtig:** Für sinnvolle Embeddings werden die Volltexte aus `DRUCKSACHE_TEXT` benötigt - nicht nur die Metadaten aus `VORGANG`!
 
 ## Daten anschauen
 
@@ -196,4 +230,27 @@ crawlify embed-vorgang
 crawlify search-vorgang "Klimaschutz"
 ```
 
-OSOegLs.PR2lwJ1dwCeje9vTj7FPOt3hvpYKtwKkhw
+## Search UI
+
+Das Projekt enthält eine moderne Web-Oberfläche mit Chat-basierter semantischer Suche:
+
+```bash
+cd search-ui
+./run.sh
+# Öffne http://localhost:8000
+```
+
+**Features:**
+- Chat-Interface für natürliche Suchanfragen
+- Semantische Suche mit Embeddings
+- Admin-Dashboard unter `/admin`
+
+Siehe [search-ui/README.md](search-ui/README.md) für Details.
+
+## Contributing
+
+Beiträge sind willkommen! Siehe [CONTRIBUTING.md](CONTRIBUTING.md) für Guidelines.
+
+## Lizenz
+
+Dieses Projekt ist unter der MIT-Lizenz lizenziert - siehe [LICENSE](LICENSE) für Details.
