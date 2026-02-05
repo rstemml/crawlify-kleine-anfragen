@@ -212,6 +212,60 @@ def fetch_drucksachen_for_vorgaenge(client: DipClient, conn, vorgang_ids: list) 
         raise
 
 
+def fetch_drucksachen_per_vorgang(client: DipClient, conn, vorgang_ids: list) -> int:
+    """Fetch drucksachen for each vorgang individually (slower but works for old vorgänge)."""
+    logger.info(f"=== 2b. Fetching Drucksachen per Vorgang ({len(vorgang_ids)} vorgänge) ===")
+
+    total_saved = 0
+    progress = FetchProgress(total_expected=len(vorgang_ids))
+
+    try:
+        for vorgang_id in vorgang_ids:
+            url = f"{client.cfg.dip_base_url}/drucksache"
+            params = {
+                "apikey": client.cfg.dip_api_key,
+                "f.vorgang": str(vorgang_id),
+            }
+
+            try:
+                resp = client.session.get(url, params=params, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    items = data.get("documents", [])
+                    num_found = data.get("numFound", 0)
+
+                    # Validate response
+                    if not items and num_found > 0:
+                        raise EmptyResponseError(
+                            f"API returned empty documents but numFound={num_found}. "
+                            "Run: crawlify solve-challenge --visible"
+                        )
+
+                    for item in items:
+                        row = normalize_drucksache(item, vorgang_id=str(vorgang_id))
+                        if row["drucksache_id"]:
+                            upsert_drucksache(conn, row)
+                            total_saved += 1
+
+            except EmptyResponseError:
+                raise
+            except Exception as e:
+                logger.warning(f"  Vorgang {vorgang_id}: Error - {e}")
+
+            progress.update(1)
+            progress.print_status()
+
+        progress.print_summary()
+        conn.commit()
+        logger.info(f"  Saved {total_saved} drucksachen")
+        return total_saved
+
+    except EmptyResponseError as e:
+        logger.error(f"\nAPI Error: {e}")
+        logger.error("Run: crawlify solve-challenge --visible")
+        raise
+
+
 def fetch_drucksache_texts(client: DipClient, conn) -> int:
     """Fetch full text for drucksachen that don't have it yet."""
     logger.info("=== 3. Fetching Drucksache Texts ===")
@@ -310,6 +364,7 @@ def main() -> int:
     parser.add_argument("--skip-vorgang", action="store_true", help="Skip vorgang fetch")
     parser.add_argument("--skip-drucksache", action="store_true", help="Skip drucksache fetch")
     parser.add_argument("--skip-text", action="store_true", help="Skip text fetch")
+    parser.add_argument("--per-vorgang", action="store_true", help="Fetch drucksachen per vorgang (slower, but works for old vorgänge)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
@@ -349,7 +404,10 @@ def main() -> int:
                     vorgang_ids = get_vorgaenge_without_drucksachen(conn, args.limit)
 
                 if vorgang_ids:
-                    fetch_drucksachen_for_vorgaenge(client, conn, vorgang_ids)
+                    if args.per_vorgang:
+                        fetch_drucksachen_per_vorgang(client, conn, vorgang_ids)
+                    else:
+                        fetch_drucksachen_for_vorgaenge(client, conn, vorgang_ids)
                 else:
                     logger.info("=== 2. No new vorgänge need drucksachen ===")
 

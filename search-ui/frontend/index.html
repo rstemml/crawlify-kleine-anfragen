@@ -1,129 +1,18 @@
 <!DOCTYPE html>
 <html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kleine Anfragen Suche</title>
-    <link rel="stylesheet" href="/static/css/styles.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div class="app-container">
-        <!-- Header -->
-        <header class="header">
-            <div class="header-content">
-                <div class="logo">
-                    <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-                        <path d="M2 17l10 5 10-5"/>
-                        <path d="M2 12l10 5 10-5"/>
-                    </svg>
-                    <span class="logo-text">Kleine Anfragen</span>
-                </div>
-                <div class="header-stats" id="header-stats">
-                    <!-- Stats loaded dynamically -->
-                </div>
-            </div>
-        </header>
-
-        <!-- Main Content -->
-        <main class="main-content">
-            <!-- Chat Panel (Left) -->
-            <aside class="chat-panel">
-                <div class="chat-header">
-                    <h2>Suchassistent</h2>
-                    <p class="chat-subtitle">Ich helfe Ihnen, relevante Anfragen zu finden</p>
-                </div>
-
-                <div class="chat-messages" id="chat-messages">
-                    <div class="message assistant">
-                        <div class="message-avatar">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"/>
-                                <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
-                                <line x1="9" y1="9" x2="9.01" y2="9"/>
-                                <line x1="15" y1="9" x2="15.01" y2="9"/>
-                            </svg>
-                        </div>
-                        <div class="message-content">
-                            <p>Willkommen! Ich bin Ihr Suchassistent fuer parlamentarische Kleine Anfragen.</p>
-                            <p>Beschreiben Sie, wonach Sie suchen, und ich finde die relevantesten Ergebnisse.</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="refinement-suggestions" id="refinement-suggestions">
-                    <!-- Suggestions loaded dynamically -->
-                </div>
-
-                <div class="chat-input-container">
-                    <form id="chat-form" class="chat-form">
-                        <input
-                            type="text"
-                            id="chat-input"
-                            class="chat-input"
-                            placeholder="z.B. Klimaschutz Massnahmen 2024..."
-                            autocomplete="off"
-                        >
-                        <button type="submit" class="chat-submit" id="chat-submit">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="22" y1="2" x2="11" y2="13"/>
-                                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                            </svg>
-                        </button>
-                    </form>
-                </div>
-            </aside>
-
-            <!-- Results Panel (Right) -->
-            <section class="results-panel">
-                <div class="results-header" id="results-header">
-                    <h2>Suchergebnisse</h2>
-                    <p class="results-subtitle">Starten Sie eine Suche im Chat</p>
-                </div>
-
-                <div class="results-filters" id="results-filters" style="display: none;">
-                    <select id="filter-ressort" class="filter-select">
-                        <option value="">Alle Ressorts</option>
-                    </select>
-                    <select id="filter-status" class="filter-select">
-                        <option value="">Alle Status</option>
-                        <option value="Beantwortet">Beantwortet</option>
-                        <option value="Noch nicht beantwortet">Noch nicht beantwortet</option>
-                    </select>
-                </div>
-
-                <div class="results-container" id="results-container">
-                    <div class="empty-state">
-                        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <circle cx="11" cy="11" r="8"/>
-                            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                        </svg>
-                        <p>Geben Sie Ihre Suchanfrage im Chat ein</p>
-                        <p class="empty-hint">Die semantische Suche versteht auch komplexe Fragen</p>
-                    </div>
-                </div>
-            </section>
-        </main>
-
-        <!-- Detail Modal -->
-        <div class="modal-overlay" id="modal-overlay">
-            <div class="modal" id="detail-modal">
-                <button class="modal-close" id="modal-close">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                </button>
-                <div class="modal-content" id="modal-content">
-                    <!-- Detail content loaded dynamically -->
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="/static/js/app.js"></script>
-</body>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/search-main.jsx"></script>
+  </body>
 </html>

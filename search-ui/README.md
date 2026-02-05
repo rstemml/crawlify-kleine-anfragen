@@ -12,16 +12,11 @@ search-ui/
 │   ├── search_service.py  # Search logic
 │   ├── admin_service.py   # Admin data access
 │   └── config.py          # Configuration
-└── frontend/              # Static frontend
-    ├── index.html         # Search UI
-    ├── admin.html         # Admin dashboard
-    └── static/
-        ├── css/
-        │   ├── styles.css # Search UI styles
-        │   └── admin.css  # Admin styles
-        └── js/
-            ├── app.js     # Search UI logic
-            └── admin.js   # Admin logic
+└── frontend/              # React + Vite frontend
+    ├── index.html         # Search UI entry
+    ├── admin.html         # Admin UI entry
+    ├── src/               # React source
+    └── dist/              # Vite build output (generated)
 ```
 
 ## Features
@@ -173,8 +168,24 @@ Environment variables:
 
 ## Development
 
-The frontend uses vanilla JavaScript with no build step required.
+The frontend uses React with Vite. Build the UI before serving from FastAPI.
 CSS uses CSS custom properties for easy theming.
+
+### Frontend Development
+
+```bash
+cd search-ui/frontend
+npm install
+npm run dev
+```
+
+For production/local FastAPI serving:
+
+```bash
+cd search-ui/frontend
+npm install
+npm run build
+```
 
 To modify the design:
 - Colors: Edit CSS variables in `frontend/static/css/styles.css`

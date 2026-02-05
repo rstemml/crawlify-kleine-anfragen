@@ -296,18 +296,19 @@ async def admin_query(
 
 # Serve frontend static files
 frontend_path = Path(__file__).parent.parent / "frontend"
-if frontend_path.exists():
-    app.mount("/static", StaticFiles(directory=str(frontend_path / "static")), name="static")
+frontend_dist = frontend_path / "dist"
+if frontend_dist.exists():
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
 
     @app.get("/")
     async def serve_frontend():
         """Serve the frontend application."""
-        return FileResponse(str(frontend_path / "index.html"))
+        return FileResponse(str(frontend_dist / "index.html"))
 
     @app.get("/admin")
     async def serve_admin():
         """Serve the admin dashboard (authentication required via API calls)."""
-        return FileResponse(str(frontend_path / "admin.html"))
+        return FileResponse(str(frontend_dist / "admin.html"))
 
 
 # --- Main ---
