@@ -37,3 +37,5 @@ credentials.json
 # Coverage
 htmlcov/
 .coverage
+
+.claude

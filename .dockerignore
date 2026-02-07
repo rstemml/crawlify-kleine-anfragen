@@ -1,0 +1,12 @@
+data/
+state/
+logs/
+node_modules/
+.git/
+.env
+.claude/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+search-ui/frontend/dist/

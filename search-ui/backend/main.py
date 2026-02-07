@@ -7,28 +7,30 @@ Can be used by web UI, Telegram bots, or any other client.
 import os
 import secrets
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from fastapi import FastAPI, HTTPException, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pathlib import Path
+import jwt
 
 from models import (
     SearchRequest, SearchResponse, SearchResultItem,
     ChatRequest, ChatResponse, ChatMessage,
-    VorgangDetail, StatsResponse
+    VorgangDetail, StatsResponse,
+    LoginRequest, LoginResponse
 )
 from search_service import search_service
 from admin_service import admin_service
-from config import API_HOST, API_PORT
+from config import API_HOST, API_PORT, JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRATION_HOURS
 
-# Admin credentials from environment (or defaults for development)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "anfragen2024")
 
-security = HTTPBasic()
+security = HTTPBearer()
 
 app = FastAPI(
     title="Kleine Anfragen Search API",
@@ -203,25 +205,51 @@ async def invalidate_cache():
     return {"status": "ok", "message": "Cache invalidated"}
 
 
-# --- Admin Authentication ---
+# --- Authentication ---
 
-def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    """Verify admin credentials."""
+def create_access_token(username: str) -> tuple[str, int]:
+    expires_in = JWT_EXPIRATION_HOURS * 3600
+    payload = {
+        "sub": username,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS),
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return token, expires_in
+
+
+@app.post("/api/auth/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
     is_username_correct = secrets.compare_digest(
-        credentials.username.encode("utf8"),
-        ADMIN_USERNAME.encode("utf8")
+        request.username.encode("utf8"),
+        ADMIN_USERNAME.encode("utf8"),
     )
     is_password_correct = secrets.compare_digest(
-        credentials.password.encode("utf8"),
-        ADMIN_PASSWORD.encode("utf8")
+        request.password.encode("utf8"),
+        ADMIN_PASSWORD.encode("utf8"),
     )
     if not (is_username_correct and is_password_correct):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
         )
-    return credentials.username
+    token, expires_in = create_access_token(request.username)
+    return LoginResponse(access_token=token, expires_in=expires_in)
+
+
+def verify_admin(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload["sub"]
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired",
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+        )
 
 
 # --- Admin API Endpoints ---

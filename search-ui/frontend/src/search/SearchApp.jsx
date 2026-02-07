@@ -2,17 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatDate, formatNumber } from '../shared/format.js';
 
 const API_BASE = '';
-const INITIAL_MESSAGE =
-  'Willkommen! Ich bin Ihr Suchassistent fuer parlamentarische Kleine Anfragen.\n' +
-  'Beschreiben Sie, wonach Sie suchen, und ich finde die relevantesten Ergebnisse.';
 
 export default function SearchApp() {
   const [conversationId, setConversationId] = useState(null);
   const [stats, setStats] = useState(null);
-  const [messages, setMessages] = useState([
-    { role: 'assistant', content: INITIAL_MESSAGE }
-  ]);
-  const [chatInput, setChatInput] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [searchInput, setSearchInput] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [results, setResults] = useState([]);
   const [filters, setFilters] = useState({ ressort: '', status: '' });
@@ -24,7 +19,7 @@ export default function SearchApp() {
   const messagesRef = useRef(null);
 
   useEffect(() => {
-    document.title = 'Kleine Anfragen Suche';
+    document.title = 'Kleine Anfragen – Semantische Suche';
     loadStats();
   }, []);
 
@@ -37,11 +32,8 @@ export default function SearchApp() {
 
   useEffect(() => {
     function handleKeyDown(event) {
-      if (event.key === 'Escape') {
-        closeModal();
-      }
+      if (event.key === 'Escape') closeModal();
     }
-
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
@@ -49,12 +41,10 @@ export default function SearchApp() {
   const filteredResults = useMemo(() => {
     let filtered = results;
     if (filters.ressort) {
-      filtered = filtered.filter((result) => result.ressort === filters.ressort);
+      filtered = filtered.filter((r) => r.ressort === filters.ressort);
     }
     if (filters.status) {
-      filtered = filtered.filter(
-        (result) => result.beratungsstand === filters.status
-      );
+      filtered = filtered.filter((r) => r.beratungsstand === filters.status);
     }
     return filtered;
   }, [results, filters]);
@@ -75,7 +65,6 @@ export default function SearchApp() {
 
   async function search(query) {
     if (isLoading) return;
-
     setIsLoading(true);
     setHasSearched(true);
 
@@ -120,13 +109,12 @@ export default function SearchApp() {
     }
   }
 
-  function handleChatSubmit(event) {
+  function handleSearchSubmit(event) {
     event.preventDefault();
-    const query = chatInput.trim();
+    const query = searchInput.trim();
     if (!query) return;
-
     addMessage('user', query);
-    setChatInput('');
+    setSearchInput('');
     search(query);
   }
 
@@ -143,9 +131,7 @@ export default function SearchApp() {
 
     if (suggestion.includes('suchen')) {
       const match = suggestion.match(/'([^']+)'/);
-      if (match) {
-        query = match[1];
-      }
+      if (match) query = match[1];
     }
 
     if (suggestion.includes('beantwortete')) {
@@ -155,7 +141,7 @@ export default function SearchApp() {
 
     if (query) {
       addMessage('user', query);
-      setChatInput('');
+      setSearchInput('');
       search(query);
     }
   }
@@ -165,7 +151,6 @@ export default function SearchApp() {
     setDetail(null);
   }
 
-  const showFilters = hasSearched;
   const resultsCount = results.length;
 
   return (
@@ -178,7 +163,7 @@ export default function SearchApp() {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
+              strokeWidth="1.5"
             >
               <path d="M12 2L2 7l10 5 10-5-10-5z" />
               <path d="M2 17l10 5 10-5" />
@@ -187,7 +172,7 @@ export default function SearchApp() {
             <span className="logo-text">Kleine Anfragen</span>
           </div>
           <div className="header-stats">
-            {stats ? (
+            {stats && (
               <>
                 <div className="header-stat">
                   <span className="header-stat-value">
@@ -202,57 +187,82 @@ export default function SearchApp() {
                   <span>Dokumente</span>
                 </div>
               </>
-            ) : null}
+            )}
           </div>
         </div>
       </header>
 
       <main className="main-content">
-        <aside className="chat-panel">
-          <div className="chat-header">
-            <h2>Suchassistent</h2>
-            <p className="chat-subtitle">
-              Ich helfe Ihnen, relevante Anfragen zu finden
-            </p>
-          </div>
+        <div className="search-hero">
+          <h1 className="search-hero-title">
+            Parlamentarische Anfragen durchsuchen
+          </h1>
+          <p className="search-hero-subtitle">
+            Semantische Suche ueber {stats ? formatNumber(stats.total_vorgaenge) : '...'} Kleine
+            Anfragen des Deutschen Bundestages. Stellen Sie Ihre Frage in natuerlicher Sprache.
+          </p>
 
-          <div className="chat-messages" ref={messagesRef}>
-            {messages.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={`message ${message.role}`}>
-                <div className="message-avatar">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    {message.role === 'user' ? (
-                      <>
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                        <circle cx="12" cy="7" r="4" />
-                      </>
-                    ) : (
-                      <>
-                        <circle cx="12" cy="12" r="10" />
-                        <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                        <line x1="9" y1="9" x2="9.01" y2="9" />
-                        <line x1="15" y1="9" x2="15.01" y2="9" />
-                      </>
-                    )}
-                  </svg>
-                </div>
-                <div className="message-content">
-                  {message.content
-                    .split('\n')
-                    .filter(Boolean)
-                    .map((line, lineIndex) => (
-                      <p key={`${index}-line-${lineIndex}`}>{line}</p>
-                    ))}
-                </div>
-              </div>
-            ))}
-          </div>
+          <form className="search-form" onSubmit={handleSearchSubmit}>
+            <input
+              type="text"
+              className="search-input"
+              placeholder="z.B. Klimaschutz, Waffenexporte, Gesundheitspolitik..."
+              autoComplete="off"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+            <button type="submit" className="search-submit" disabled={isLoading}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              Suchen
+            </button>
+          </form>
+        </div>
 
+        {messages.length > 0 && (
+          <div className="chat-thread" ref={messagesRef}>
+            <div className="chat-messages">
+              {messages.map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`message ${message.role}`}>
+                  <div className="message-avatar">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      {message.role === 'user' ? (
+                        <>
+                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                          <circle cx="12" cy="7" r="4" />
+                        </>
+                      ) : (
+                        <>
+                          <circle cx="12" cy="12" r="10" />
+                          <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                          <line x1="9" y1="9" x2="9.01" y2="9" />
+                          <line x1="15" y1="9" x2="15.01" y2="9" />
+                        </>
+                      )}
+                    </svg>
+                  </div>
+                  <div className="message-content">
+                    {message.content
+                      .split('\n')
+                      .filter(Boolean)
+                      .map((line, i) => (
+                        <p key={`${index}-${i}`}>{line}</p>
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {suggestions.length > 0 && (
           <div className="refinement-suggestions">
             {suggestions.map((suggestion) => (
               <button
@@ -265,47 +275,32 @@ export default function SearchApp() {
               </button>
             ))}
           </div>
+        )}
 
-          <div className="chat-input-container">
-            <form className="chat-form" onSubmit={handleChatSubmit}>
-              <input
-                type="text"
-                className="chat-input"
-                placeholder="z.B. Klimaschutz Massnahmen 2024..."
-                autoComplete="off"
-                value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
-              />
-              <button type="submit" className="chat-submit" disabled={isLoading}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </button>
-            </form>
-          </div>
-        </aside>
-
-        <section className="results-panel">
+        <section className="results-section">
           <div className="results-header">
-            <h2>Suchergebnisse</h2>
+            <h2 className="results-title">
+              {hasSearched ? 'Ergebnisse' : 'Suchergebnisse'}
+            </h2>
             {hasSearched ? (
               <p className="results-subtitle">
                 <span className="results-count">{resultsCount}</span> relevante
                 Anfragen gefunden
               </p>
             ) : (
-              <p className="results-subtitle">Starten Sie eine Suche im Chat</p>
+              <p className="results-subtitle">
+                Geben Sie eine Suchanfrage ein, um zu starten
+              </p>
             )}
           </div>
 
-          {showFilters ? (
+          {hasSearched && (
             <div className="results-filters">
               <select
                 className="filter-select"
                 value={filters.ressort}
-                onChange={(event) =>
-                  setFilters((prev) => ({ ...prev, ressort: event.target.value }))
+                onChange={(e) =>
+                  setFilters((prev) => ({ ...prev, ressort: e.target.value }))
                 }
               >
                 <option value="">Alle Ressorts</option>
@@ -318,8 +313,8 @@ export default function SearchApp() {
               <select
                 className="filter-select"
                 value={filters.status}
-                onChange={(event) =>
-                  setFilters((prev) => ({ ...prev, status: event.target.value }))
+                onChange={(e) =>
+                  setFilters((prev) => ({ ...prev, status: e.target.value }))
                 }
               >
                 <option value="">Alle Status</option>
@@ -327,12 +322,13 @@ export default function SearchApp() {
                 <option value="Noch nicht beantwortet">Noch nicht beantwortet</option>
               </select>
             </div>
-          ) : null}
+          )}
 
           <div className="results-container">
             {isLoading ? (
               <div className="loading">
-                <div className="loading-spinner"></div>
+                <div className="loading-spinner" />
+                <span className="loading-text">Suche laeuft...</span>
               </div>
             ) : !hasSearched ? (
               <div className="empty-state">
@@ -346,9 +342,9 @@ export default function SearchApp() {
                   <circle cx="11" cy="11" r="8" />
                   <line x1="21" y1="21" x2="16.65" y2="16.65" />
                 </svg>
-                <p>Geben Sie Ihre Suchanfrage im Chat ein</p>
+                <p>Die semantische Suche versteht natuerliche Sprache</p>
                 <p className="empty-hint">
-                  Die semantische Suche versteht auch komplexe Fragen
+                  Formulieren Sie Ihre Frage, als wuerden Sie einen Experten fragen
                 </p>
               </div>
             ) : filteredResults.length === 0 ? (
@@ -383,10 +379,8 @@ export default function SearchApp() {
                     role="button"
                     tabIndex={0}
                     onClick={() => loadVorgangDetail(result.vorgang_id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        loadVorgangDetail(result.vorgang_id);
-                      }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') loadVorgangDetail(result.vorgang_id);
                     }}
                   >
                     <div className="result-card-header">
@@ -399,14 +393,9 @@ export default function SearchApp() {
                     </div>
 
                     <div className="result-card-meta">
-                      {result.datum ? (
+                      {result.datum && (
                         <span className="result-card-meta-item">
-                          <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                          >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
                             <line x1="16" y1="2" x2="16" y2="6" />
                             <line x1="8" y1="2" x2="8" y2="6" />
@@ -414,35 +403,28 @@ export default function SearchApp() {
                           </svg>
                           {formatDate(result.datum)}
                         </span>
-                      ) : null}
-                      {result.ressort ? (
+                      )}
+                      {result.ressort && (
                         <span className="result-card-meta-item">
-                          <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                          >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
                           </svg>
                           {result.ressort}
                         </span>
-                      ) : null}
+                      )}
                     </div>
 
-                    {result.highlight ? (
+                    {result.highlight && (
                       <div className="result-card-highlight">{result.highlight}</div>
-                    ) : null}
+                    )}
 
-                    {tags.length ? (
+                    {tags.length > 0 && (
                       <div className="result-card-tags">
                         {tags.map((tag) => (
-                          <span key={tag} className="result-card-tag">
-                            {tag}
-                          </span>
+                          <span key={tag} className="result-card-tag">{tag}</span>
                         ))}
                       </div>
-                    ) : null}
+                    )}
 
                     <div className="result-card-status">
                       <span className={`status-badge ${statusClass}`}>{statusText}</span>
@@ -455,12 +437,14 @@ export default function SearchApp() {
         </section>
       </main>
 
+      <footer className="site-footer">
+        Daten vom Dokumentations- und Informationssystem des Deutschen Bundestages (DIP)
+      </footer>
+
       <div
         className={`modal-overlay ${isModalOpen ? 'active' : ''}`}
-        onClick={(event) => {
-          if (event.target.classList.contains('modal-overlay')) {
-            closeModal();
-          }
+        onClick={(e) => {
+          if (e.target.classList.contains('modal-overlay')) closeModal();
         }}
       >
         <div className="modal">
@@ -471,7 +455,7 @@ export default function SearchApp() {
             </svg>
           </button>
           <div className="modal-content">
-            {detail ? (
+            {detail && (
               <>
                 <h2 className="modal-title">{detail.titel || 'Ohne Titel'}</h2>
 
@@ -484,7 +468,9 @@ export default function SearchApp() {
                   </div>
                   <div className="modal-meta-item">
                     <div className="modal-meta-label">Status</div>
-                    <div className="modal-meta-value">{detail.beratungsstand || '-'}</div>
+                    <div className="modal-meta-value">
+                      {detail.beratungsstand || '-'}
+                    </div>
                   </div>
                   <div className="modal-meta-item">
                     <div className="modal-meta-label">Ressort</div>
@@ -499,48 +485,49 @@ export default function SearchApp() {
                 <div className="modal-section">
                   <div className="modal-section-title">Initiatoren</div>
                   <p className="modal-text">
-                    {(detail.initiatoren && detail.initiatoren.length
+                    {detail.initiatoren?.length
                       ? detail.initiatoren.join(', ')
-                      : 'Nicht angegeben')}
+                      : 'Nicht angegeben'}
                   </p>
                 </div>
 
-                {detail.abstrakt ? (
+                {detail.abstrakt && (
                   <div className="modal-section">
                     <div className="modal-section-title">Zusammenfassung</div>
                     <p className="modal-text">{detail.abstrakt}</p>
                   </div>
-                ) : null}
+                )}
 
-                {detail.schlagworte && detail.schlagworte.length ? (
+                {detail.schlagworte?.length > 0 && (
                   <div className="modal-section">
                     <div className="modal-section-title">Schlagworte</div>
                     <div className="result-card-tags">
                       {detail.schlagworte.map((tag) => (
-                        <span key={tag} className="result-card-tag">
-                          {tag}
-                        </span>
+                        <span key={tag} className="result-card-tag">{tag}</span>
                       ))}
                     </div>
                   </div>
-                ) : null}
+                )}
 
                 <div className="modal-section">
                   <div className="modal-section-title">Dokumente</div>
                   <div className="document-list">
-                    {detail.drucksachen && detail.drucksachen.length ? (
+                    {detail.drucksachen?.length > 0 ? (
                       detail.drucksachen.map((doc) => (
-                        <div key={doc.drucksache_id || doc.dok_url} className="document-item">
+                        <div
+                          key={doc.drucksache_id || doc.dok_url}
+                          className="document-item"
+                        >
                           <div className="document-info">
                             <div className="document-title">
                               {doc.titel || doc.drucksachetyp || 'Dokument'}
                             </div>
                             <div className="document-meta">
                               {doc.drucksache_nummer || ''}
-                              {doc.datum ? ` | ${formatDate(doc.datum)}` : ''}
+                              {doc.datum ? ` · ${formatDate(doc.datum)}` : ''}
                             </div>
                           </div>
-                          {doc.dok_url ? (
+                          {doc.dok_url && (
                             <a
                               href={doc.dok_url}
                               target="_blank"
@@ -549,7 +536,7 @@ export default function SearchApp() {
                             >
                               PDF
                             </a>
-                          ) : null}
+                          )}
                         </div>
                       ))
                     ) : (
@@ -558,7 +545,7 @@ export default function SearchApp() {
                   </div>
                 </div>
               </>
-            ) : null}
+            )}
           </div>
         </div>
       </div>

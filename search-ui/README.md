@@ -7,15 +7,15 @@ A modern semantic search interface for German parliamentary questions (Kleine An
 ```
 search-ui/
 ├── backend/               # FastAPI backend (separate API)
-│   ├── main.py            # API endpoints
+│   ├── main.py            # API endpoints + JWT auth
 │   ├── models.py          # Pydantic models
 │   ├── search_service.py  # Search logic
 │   ├── admin_service.py   # Admin data access
 │   └── config.py          # Configuration
-└── frontend/              # React + Vite frontend
+└── frontend/              # Preact + Vite frontend
     ├── index.html         # Search UI entry
     ├── admin.html         # Admin UI entry
-    ├── src/               # React source
+    ├── src/               # Preact source
     └── dist/              # Vite build output (generated)
 ```
 
@@ -25,7 +25,8 @@ search-ui/
 - **Chat Interface**: Conversational search with refinement suggestions
 - **Card-based Results**: Visual display with relevance scores and highlights
 - **Separate Backend API**: Can be used by web UI, Telegram bots, or any client
-- **Admin Dashboard**: Password-protected admin panel for database visualization
+- **Admin Dashboard**: JWT-protected admin panel for database visualization
+- **Docker Support**: Single-container deployment with docker compose
 
 ## Setup
 
@@ -58,6 +59,19 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ### 3. Open the UI
 
 Visit http://localhost:8000 in your browser.
+
+## Docker
+
+Build and run with Docker Compose:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+The app will be accessible at http://localhost:8000.
+
+Data, state, and logs directories are mounted as volumes so the database persists across container restarts. Set environment variables in `.env` or pass them directly.
 
 ## API Endpoints
 
@@ -95,34 +109,23 @@ curl http://localhost:8000/api/vorgang/12345
 curl http://localhost:8000/api/stats
 ```
 
-## Telegram Bot Integration
-
-Example Python code for a Telegram bot:
-
-```python
-import requests
-
-API_URL = "http://localhost:8000"
-
-def search_anfragen(query: str, limit: int = 5):
-    response = requests.post(
-        f"{API_URL}/api/search",
-        json={"query": query, "limit": limit}
-    )
-    return response.json()
-
-def format_result(result):
-    return f"""
-*{result['titel']}*
-Relevanz: {int(result['score'] * 100)}%
-Datum: {result.get('datum', 'N/A')}
-Status: {result.get('beratungsstand', 'N/A')}
-"""
-```
-
 ## Admin Dashboard
 
 Access the admin panel at http://localhost:8000/admin
+
+### Authentication
+
+Admin uses JWT tokens. Log in via the web form or obtain a token via API:
+
+```bash
+# Get a JWT token
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "anfragen2024"}'
+
+# Use the token for admin endpoints
+curl -H "Authorization: Bearer <token>" http://localhost:8000/api/admin/overview
+```
 
 ### Default Credentials
 
@@ -138,23 +141,23 @@ Access the admin panel at http://localhost:8000/admin
 
 ### Admin API Endpoints
 
-All admin endpoints require HTTP Basic Auth:
+All admin endpoints require a JWT Bearer token:
 
 ```bash
 # Overview stats
-curl -u admin:anfragen2024 http://localhost:8000/api/admin/overview
+curl -H "Authorization: Bearer <token>" http://localhost:8000/api/admin/overview
 
 # Paginated vorgaenge
-curl -u admin:anfragen2024 "http://localhost:8000/api/admin/vorgaenge?limit=50&offset=0"
+curl -H "Authorization: Bearer <token>" "http://localhost:8000/api/admin/vorgaenge?limit=50&offset=0"
 
 # Drucksachen for a vorgang
-curl -u admin:anfragen2024 "http://localhost:8000/api/admin/drucksachen?vorgang_id=12345"
+curl -H "Authorization: Bearer <token>" "http://localhost:8000/api/admin/drucksachen?vorgang_id=12345"
 
 # Full text
-curl -u admin:anfragen2024 http://localhost:8000/api/admin/drucksache-text/67890
+curl -H "Authorization: Bearer <token>" http://localhost:8000/api/admin/drucksache-text/67890
 
 # SQL query
-curl -u admin:anfragen2024 -X POST "http://localhost:8000/api/admin/query?query=SELECT%20COUNT(*)%20FROM%20vorgang"
+curl -H "Authorization: Bearer <token>" -X POST "http://localhost:8000/api/admin/query?query=SELECT%20COUNT(*)%20FROM%20vorgang"
 ```
 
 ## Configuration
@@ -165,10 +168,13 @@ Environment variables:
 - `API_PORT`: Port to bind to (default: 8000)
 - `ADMIN_USERNAME`: Admin username (default: admin)
 - `ADMIN_PASSWORD`: Admin password (default: anfragen2024)
+- `JWT_SECRET`: Secret key for JWT signing (change in production!)
+- `JWT_EXPIRATION_HOURS`: Token validity in hours (default: 24)
+- `DB_PATH`: Override database path (useful for Docker)
 
 ## Development
 
-The frontend uses React with Vite. Build the UI before serving from FastAPI.
+The frontend uses Preact with Vite. Build the UI before serving from FastAPI.
 CSS uses CSS custom properties for easy theming.
 
 ### Frontend Development
@@ -186,8 +192,3 @@ cd search-ui/frontend
 npm install
 npm run build
 ```
-
-To modify the design:
-- Colors: Edit CSS variables in `frontend/static/css/styles.css`
-- Layout: Modify the HTML structure in `frontend/index.html`
-- Behavior: Update `frontend/static/js/app.js`

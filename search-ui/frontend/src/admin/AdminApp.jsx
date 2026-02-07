@@ -4,7 +4,7 @@ import { formatNumber, formatShortDate } from '../shared/format.js';
 const API_BASE = '';
 
 export default function AdminApp() {
-  const [authCredentials, setAuthCredentials] = useState(null);
+  const [adminToken, setAdminToken] = useState(null);
   const [loginError, setLoginError] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
 
@@ -29,33 +29,43 @@ export default function AdminApp() {
 
   useEffect(() => {
     document.title = 'Admin - Kleine Anfragen';
-    const stored = sessionStorage.getItem('adminAuth');
+    const stored = sessionStorage.getItem('adminToken');
     if (stored) {
-      setAuthCredentials(stored);
+      setAdminToken(stored);
     }
   }, []);
 
   const username = useMemo(() => {
-    if (!authCredentials) return '';
+    if (!adminToken) return '';
     try {
-      const decoded = atob(authCredentials);
-      return decoded.split(':')[0] || '';
+      const payload = JSON.parse(atob(adminToken.split('.')[1]));
+      return payload.sub || '';
     } catch {
       return '';
     }
-  }, [authCredentials]);
+  }, [adminToken]);
+
+  function handleExpiredToken() {
+    sessionStorage.removeItem('adminToken');
+    setAdminToken(null);
+    setLoginError('Sitzung abgelaufen, bitte erneut anmelden');
+  }
 
   const fetchWithAuth = useCallback(
-    (url, options = {}) => {
-      return fetch(`${API_BASE}${url}`, {
+    async (url, options = {}) => {
+      const response = await fetch(`${API_BASE}${url}`, {
         ...options,
         headers: {
           ...options.headers,
-          Authorization: `Basic ${authCredentials}`
+          Authorization: `Bearer ${adminToken}`
         }
       });
+      if (response.status === 401) {
+        handleExpiredToken();
+      }
+      return response;
     },
-    [authCredentials]
+    [adminToken]
   );
 
   const loadOverview = useCallback(async () => {
@@ -118,18 +128,18 @@ export default function AdminApp() {
   }, [fetchWithAuth, drucksachenPage, drucksachenVorgangId]);
 
   useEffect(() => {
-    if (!authCredentials) return;
+    if (!adminToken) return;
     if (activeTab === 'overview') loadOverview();
-  }, [authCredentials, activeTab, loadOverview]);
+  }, [adminToken, activeTab, loadOverview]);
 
   useEffect(() => {
-    if (!authCredentials || activeTab !== 'vorgaenge') return;
+    if (!adminToken || activeTab !== 'vorgaenge') return;
     const debounceId = setTimeout(() => {
       loadVorgaenge();
     }, 300);
     return () => clearTimeout(debounceId);
   }, [
-    authCredentials,
+    adminToken,
     activeTab,
     loadVorgaenge,
     vorgaengeSearch,
@@ -141,12 +151,12 @@ export default function AdminApp() {
   ]);
 
   useEffect(() => {
-    if (!authCredentials || activeTab !== 'drucksachen') return;
+    if (!adminToken || activeTab !== 'drucksachen') return;
     const debounceId = setTimeout(() => {
       loadDrucksachen();
     }, 300);
     return () => clearTimeout(debounceId);
-  }, [authCredentials, activeTab, loadDrucksachen, drucksachenPage, drucksachenVorgangId]);
+  }, [adminToken, activeTab, loadDrucksachen, drucksachenPage, drucksachenVorgangId]);
 
   async function handleLogin(event) {
     event.preventDefault();
@@ -154,18 +164,18 @@ export default function AdminApp() {
 
     const usernameInput = event.target.elements.username.value;
     const passwordInput = event.target.elements.password.value;
-    const credentials = btoa(`${usernameInput}:${passwordInput}`);
 
     try {
-      const response = await fetch(`${API_BASE}/api/admin/overview`, {
-        headers: {
-          Authorization: `Basic ${credentials}`
-        }
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: usernameInput, password: passwordInput })
       });
 
       if (response.ok) {
-        sessionStorage.setItem('adminAuth', credentials);
-        setAuthCredentials(credentials);
+        const data = await response.json();
+        sessionStorage.setItem('adminToken', data.access_token);
+        setAdminToken(data.access_token);
         setActiveTab('overview');
       } else {
         setLoginError('Ungueltige Anmeldedaten');
@@ -176,8 +186,8 @@ export default function AdminApp() {
   }
 
   function handleLogout() {
-    sessionStorage.removeItem('adminAuth');
-    setAuthCredentials(null);
+    sessionStorage.removeItem('adminToken');
+    setAdminToken(null);
     setLoginError('');
     setActiveTab('overview');
   }
@@ -258,7 +268,7 @@ export default function AdminApp() {
   const ressortOptions = overview?.by_ressort || [];
   const statusOptions = overview?.by_status || [];
 
-  if (!authCredentials) {
+  if (!adminToken) {
     return (
       <div className="login-overlay">
         <div className="login-modal">
