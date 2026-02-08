@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
 
   search-ui:
-    build: .
+    image: crawlify-kleine-anfragen
     expose:
       - "8000"
     volumes:

@@ -1,100 +1,40 @@
-"""Search service that wraps the crawlify search functionality."""
+"""Search service — uses SQL text search (no embedding model required)."""
 import json
 import sqlite3
-import re
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from config import DB_PATH, EMBEDDING_MODEL
+from config import DB_PATH
 
 
 class SearchService:
-    """Semantic search service for Kleine Anfragen."""
-
-    def __init__(self):
-        self._embedding_model = None
-        self._embeddings_cache: Optional[List[Tuple[str, List[float], Dict[str, Any]]]] = None
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get database connection."""
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _get_embedding_model(self):
-        """Lazy load embedding model."""
-        if self._embedding_model is None:
-            from sentence_transformers import SentenceTransformer
-            self._embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-        return self._embedding_model
-
-    def _load_embeddings(self, conn: sqlite3.Connection) -> List[Tuple[str, List[float], Dict[str, Any]]]:
-        """Load all embeddings from database."""
-        if self._embeddings_cache is not None:
-            return self._embeddings_cache
-
-        rows = conn.execute("""
-            SELECT vorgang_id, embedding_json, titel, datum, ressort,
-                   beratungsstand, abstrakt, initiatoren_json, schlagworte_json
-            FROM vorgang
-            WHERE embedding_json IS NOT NULL
-        """).fetchall()
-
-        items = []
-        for row in rows:
-            vector = json.loads(row["embedding_json"])
-            meta = {
-                "titel": row["titel"],
-                "datum": row["datum"],
-                "ressort": row["ressort"],
-                "beratungsstand": row["beratungsstand"],
-                "abstrakt": row["abstrakt"],
-                "initiatoren": json.loads(row["initiatoren_json"]) if row["initiatoren_json"] else None,
-                "schlagworte": json.loads(row["schlagworte_json"]) if row["schlagworte_json"] else None,
-            }
-            items.append((row["vorgang_id"], vector, meta))
-
-        self._embeddings_cache = items
-        return items
-
-    def _cosine_sim(self, a: List[float], b: List[float]) -> float:
-        """Calculate cosine similarity."""
-        import math
-        if not a or not b or len(a) != len(b):
-            return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
-        norm_a = math.sqrt(sum(x * x for x in a))
-        norm_b = math.sqrt(sum(y * y for y in b))
-        if norm_a == 0.0 or norm_b == 0.0:
-            return 0.0
-        return dot / (norm_a * norm_b)
-
     def _extract_highlight(self, text: str, query: str, max_length: int = 200) -> Optional[str]:
-        """Extract relevant snippet from text based on query terms."""
         if not text:
             return None
 
-        # Simple keyword matching for highlight
         query_terms = query.lower().split()
         text_lower = text.lower()
 
         best_pos = 0
         best_score = 0
 
-        # Find position with most query term matches nearby
         for i in range(0, len(text), 50):
-            window = text_lower[i:i+max_length]
+            window = text_lower[i:i + max_length]
             score = sum(1 for term in query_terms if term in window)
             if score > best_score:
                 best_score = score
                 best_pos = i
 
-        # Extract snippet
         start = max(0, best_pos - 20)
         end = min(len(text), start + max_length)
         snippet = text[start:end]
 
-        # Clean up snippet
         if start > 0:
             snippet = "..." + snippet
         if end < len(text):
@@ -108,82 +48,74 @@ class SearchService:
         limit: int = 20,
         filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Perform semantic search.
-
-        Args:
-            query: Search query text
-            limit: Maximum results to return
-            filters: Optional filters (ressort, beratungsstand, datum_from, datum_to)
-
-        Returns:
-            Dict with results, suggestions, etc.
-        """
         conn = self._get_connection()
 
-        # Embed query
-        model = self._get_embedding_model()
-        query_vec = model.encode([query], normalize_embeddings=True).tolist()[0]
+        where_clauses = []
+        params: list = []
 
-        # Load all embeddings
-        items = self._load_embeddings(conn)
+        for term in query.split():
+            where_clauses.append("(v.titel LIKE ? OR v.abstrakt LIKE ?)")
+            like = f"%{term}%"
+            params.extend([like, like])
 
-        # Calculate similarities
-        scored = []
-        for vorgang_id, vec, meta in items:
-            # Apply filters
-            if filters:
-                if filters.get("ressort") and meta.get("ressort") != filters["ressort"]:
-                    continue
-                if filters.get("beratungsstand") and meta.get("beratungsstand") != filters["beratungsstand"]:
-                    continue
+        filter_sql = ""
+        if filters:
+            if filters.get("ressort"):
+                where_clauses.append("v.ressort = ?")
+                params.append(filters["ressort"])
+            if filters.get("beratungsstand"):
+                where_clauses.append("v.beratungsstand = ?")
+                params.append(filters["beratungsstand"])
 
-            score = self._cosine_sim(query_vec, vec)
-            scored.append((vorgang_id, score, meta))
+        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
-        # Sort by score
-        scored.sort(key=lambda x: x[1], reverse=True)
-        top_results = scored[:limit]
+        rows = conn.execute(f"""
+            SELECT v.vorgang_id, v.titel, v.datum, v.ressort,
+                   v.beratungsstand, v.abstrakt, v.initiatoren_json, v.schlagworte_json
+            FROM vorgang v
+            WHERE {where_sql}
+            ORDER BY v.datum DESC
+            LIMIT ?
+        """, params + [limit]).fetchall()
 
-        # Get drucksachen for top results
+        count_row = conn.execute(f"""
+            SELECT COUNT(*) FROM vorgang v WHERE {where_sql}
+        """, params).fetchone()
+        total_found = count_row[0]
+
         results = []
-        for vorgang_id, score, meta in top_results:
-            # Fetch drucksachen
+        for row in rows:
             drucksachen = conn.execute("""
                 SELECT drucksache_id, titel, drucksachetyp, drucksache_nummer, datum, dok_url
                 FROM drucksache
                 WHERE vorgang_id = ?
-            """, (vorgang_id,)).fetchall()
+            """, (row["vorgang_id"],)).fetchall()
 
-            drucksachen_list = [dict(d) for d in drucksachen]
-
-            # Extract highlight
-            highlight_text = meta.get("abstrakt") or meta.get("titel") or ""
+            highlight_text = row["abstrakt"] or row["titel"] or ""
             highlight = self._extract_highlight(highlight_text, query)
 
             results.append({
-                "vorgang_id": vorgang_id,
-                "titel": meta.get("titel"),
-                "datum": meta.get("datum"),
-                "ressort": meta.get("ressort"),
-                "beratungsstand": meta.get("beratungsstand"),
-                "abstrakt": meta.get("abstrakt"),
-                "initiatoren": meta.get("initiatoren"),
-                "schlagworte": meta.get("schlagworte"),
-                "score": round(score, 4),
+                "vorgang_id": row["vorgang_id"],
+                "titel": row["titel"],
+                "datum": row["datum"],
+                "ressort": row["ressort"],
+                "beratungsstand": row["beratungsstand"],
+                "abstrakt": row["abstrakt"],
+                "initiatoren": json.loads(row["initiatoren_json"]) if row["initiatoren_json"] else None,
+                "schlagworte": json.loads(row["schlagworte_json"]) if row["schlagworte_json"] else None,
+                "score": 1.0,
                 "highlight": highlight,
-                "drucksachen": drucksachen_list,
+                "drucksachen": [dict(d) for d in drucksachen],
             })
 
         conn.close()
 
-        # Generate refinement suggestions
         suggestions = self._generate_refinement_suggestions(query, results)
 
         return {
             "query": query,
             "results": results,
-            "total_found": len(scored),
+            "total_found": total_found,
             "refinement_suggestions": suggestions,
         }
 

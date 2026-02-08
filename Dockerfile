@@ -12,12 +12,10 @@ WORKDIR /app
 
 COPY pyproject.toml setup.cfg* setup.py* ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir -e ".[embeddings]"
+RUN pip install --no-cache-dir -e .
 
 COPY search-ui/backend/requirements.txt /app/search-ui/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/search-ui/backend/requirements.txt
-
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-small')"
 
 COPY search-ui/backend/ /app/search-ui/backend/
 
