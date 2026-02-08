@@ -77,13 +77,19 @@ class VorgangDetail(BaseModel):
     drucksachen: List[Dict[str, Any]]
 
 
+class NameCountItem(BaseModel):
+    """Label and count for stats aggregates (e.g. ressort, beratungsstand)."""
+    name: str
+    count: int
+
+
 class StatsResponse(BaseModel):
     """Database statistics."""
     total_vorgaenge: int
     total_drucksachen: int
     total_with_embeddings: int
-    ressorts: List[Dict[str, int]]
-    beratungsstaende: List[Dict[str, int]]
+    ressorts: List[NameCountItem]
+    beratungsstaende: List[NameCountItem]
 
 
 class LoginRequest(BaseModel):
